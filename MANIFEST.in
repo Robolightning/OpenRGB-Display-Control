@@ -1,0 +1,5 @@
+include LICENSE README.md CHANGELOG.md CONTRIBUTING.md THIRD_PARTY_NOTICES.md constraints-tested.txt
+recursive-include docs *.md *.rules *.json
+recursive-include tests *.py
+recursive-include upstream *.md *.patch *.json *.cpp *.h
+recursive-include third_party_licenses *.txt

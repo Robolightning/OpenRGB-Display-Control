@@ -1,0 +1,47 @@
+name: checks
+on: [push, pull_request]
+permissions:
+  contents: read
+jobs:
+  test:
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, windows-latest]
+        python: ['3.11', '3.14']
+    runs-on: ${{ matrix.os }}
+    env:
+      QT_QPA_PLATFORM: offscreen
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: ${{ matrix.python }}
+      - if: runner.os == 'Linux'
+        run: sudo apt-get update && sudo apt-get install -y libegl1 libopengl0 libhidapi-hidraw0
+      - run: python -m pip install ".[dev,gui]"
+      - run: python -m ruff check .
+      - run: python -m ruff format --check .
+      - run: python -m pytest -q
+      - run: python -m build
+      - run: python -m pip install --force-reinstall --no-deps --no-index --find-links dist openrgb-display-control==0.1.0a1
+      - run: openrgb-display-control --version
+  native-transport:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: Apply isolated driver patch to its recorded upstream base
+        run: |
+          git init core
+          git -C core remote add origin https://gitlab.com/CalcProgrammer1/OpenRGB.git
+          git -C core fetch --depth 1 origin 5bcfa9ae01536d2dd45b0c6e5b15677513f7a6d5
+          git -C core checkout --detach FETCH_HEAD
+          git -C core apply ../upstream/0001-Add-X670E-Extreme-AniMe-Matrix-driver.patch
+      - name: Build simulated native transport test
+        run: >-
+          g++ -std=c++17 -Wall -Wextra
+          -Iupstream/native_test_shims -Icore/Controllers/AsusAnimeMatrixController
+          upstream/native_transport_test.cpp
+          core/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp
+          -o native-transport-test
+      - run: ./native-transport-test

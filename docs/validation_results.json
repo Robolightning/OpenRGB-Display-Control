@@ -1,0 +1,62 @@
+{
+  "date": "2026-11-18",
+  "windows_python": "3.14.7",
+  "windows_tests_passed": 52,
+  "linux_python": "3.12.3",
+  "linux_tests_passed": 48,
+  "linux_gui_module_skipped": true,
+  "native_transport_windows_and_linux": "passed",
+  "native_live": {
+    "native_transfer_ok": true,
+    "off_readback": 0,
+    "warnings": 0
+  },
+  "companion_live": {
+    "matrix_apng": {
+      "frames_sent": 3,
+      "source_frames_skipped": 0,
+      "elapsed_seconds": 0.254,
+      "cancelled": false
+    },
+    "matrix_text": {
+      "frames": 1,
+      "bytes": 768,
+      "cancelled": false
+    },
+    "matrix_off": {
+      "backend": "sdk",
+      "mode": "Off",
+      "pixels": 222
+    },
+    "corsair_apng": {
+      "frames_sent": 3,
+      "source_frames_skipped": 0,
+      "elapsed_seconds": 0.254,
+      "cancelled": false
+    },
+    "corsair_text": {
+      "frames": 1,
+      "bytes": 15359,
+      "cancelled": false
+    },
+    "corsair_off": {
+      "backend": "usb",
+      "black_frame_sent": true,
+      "backlight_percent": 0
+    },
+    "unrelated_rgb_unchanged": true
+  },
+  "sdk_identity_check_live": {
+    "identity_checked_each_write": true,
+    "updates_sent": 60,
+    "elapsed_seconds": 1.006,
+    "median_sdk_call_ms": 2.347,
+    "max_sdk_call_ms": 47.475,
+    "off_mode_confirmed": true
+  },
+  "sdk_timing_scope": "SDK command submission only; physical per-frame visibility was not measured",
+  "hosted_ci_run": false,
+  "full_fresh_openrgb_build": false,
+  "human_review_complete": false,
+  "physical_portrait_landmarks_confirmed": false
+}

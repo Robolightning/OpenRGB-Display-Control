@@ -1,0 +1,20 @@
+{
+  "base": "5bcfa9ae01536d2dd45b0c6e5b15677513f7a6d5",
+  "commit": "651b0486aa9329e50162794477e8997dfcecb1e1",
+  "branch": "feature/asus-x670e-anime-matrix-reviewed",
+  "patch_sha256": "197a671cf70045c80abf7fc4ac9dfbba48e4a15272a56af10004624811c1ae70",
+  "contains_gui": false,
+  "contains_python": false,
+  "contains_commander_fix": false,
+  "human_review_complete": false,
+  "physical_portrait_landmarks_confirmed": false,
+  "files": [
+    "Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp",
+    "Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.h",
+    "Controllers/AsusAnimeMatrixController/AsusAnimeMatrixControllerDetect.cpp",
+    "Controllers/AsusAnimeMatrixController/AsusAnimeMatrixMap.h",
+    "Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.cpp",
+    "Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.h",
+    "Documentation/ASUSAnimeMatrix.md"
+  ]
+}

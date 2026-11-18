@@ -1,0 +1,735 @@
+From 651b0486aa9329e50162794477e8997dfcecb1e1 Mon Sep 17 00:00:00 2001
+From: Robolightning <irobolightning@gmail.com>
+Date: Wed, 18 Nov 2026 14:42:43 +0300
+Subject: [PATCH] Add X670E Extreme AniMe Matrix driver
+
+---
+ .../AsusAnimeMatrixController.cpp             | 266 ++++++++++++++++++
+ .../AsusAnimeMatrixController.h               |  51 ++++
+ .../AsusAnimeMatrixControllerDetect.cpp       |  48 ++++
+ .../AsusAnimeMatrixMap.h                      |  67 +++++
+ .../RGBController_AsusAnimeMatrix.cpp         | 143 ++++++++++
+ .../RGBController_AsusAnimeMatrix.h           |  32 +++
+ Documentation/ASUSAnimeMatrix.md              |  64 +++++
+ 7 files changed, 671 insertions(+)
+ create mode 100644 Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp
+ create mode 100644 Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.h
+ create mode 100644 Controllers/AsusAnimeMatrixController/AsusAnimeMatrixControllerDetect.cpp
+ create mode 100644 Controllers/AsusAnimeMatrixController/AsusAnimeMatrixMap.h
+ create mode 100644 Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.cpp
+ create mode 100644 Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.h
+ create mode 100644 Documentation/ASUSAnimeMatrix.md
+
+diff --git a/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp
+new file mode 100644
+index 0000000..026acd1
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.cpp
+@@ -0,0 +1,266 @@
++/*---------------------------------------------------------*\
++| AsusAnimeMatrixController.cpp                            |
++|                                                         |
++|   USB transport for X670E Extreme AniMe Matrix           |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include "AsusAnimeMatrixController.h"
++#include "LogManager.h"
++#include "StringUtils.h"
++#include <chrono>
++#include <cstring>
++
++std::shared_ptr<libusb_context> AsusAnimeMatrixController::SharedUSBContext()
++{
++    /*-----------------------------------------------------*\
++    | Create before generic detection selects UsbDk as the  |
++    | global default. Instances retain context ownership   |
++    | across rescans and through static destruction.       |
++    \*-----------------------------------------------------*/
++    static std::shared_ptr<libusb_context> context;
++    static std::mutex context_mutex;
++    std::lock_guard<std::mutex> guard(context_mutex);
++    if(!context)
++    {
++        libusb_context* value = nullptr;
++        int result = libusb_init(&value);
++        if(result != 0)
++        {
++            LOG_WARNING("[ASUS AniMe Matrix] USB context initialization: %s", libusb_error_name(result));
++        }
++        else
++        {
++            context = std::shared_ptr<libusb_context>(value, libusb_exit);
++        }
++    }
++    return context;
++}
++
++AsusAnimeMatrixController::AsusAnimeMatrixController(hid_device* device, const char* path, const char* firmware_string)
++    : hid(device), usb_context(SharedUSBContext()), bulk(nullptr),
++      location(std::string("HID: ") + path), firmware(firmware_string),
++      frame_valid(false), hardware_mode(-1)
++{
++    wchar_t number[256] = {};
++    if(hid_get_serial_number_string(hid, number, 256) == 0)
++    {
++        serial = StringUtils::wchar_to_string(number);
++    }
++    ReadMode();
++}
++
++AsusAnimeMatrixController::~AsusAnimeMatrixController()
++{
++    CloseBulk();
++    hid_close(hid);
++}
++
++bool AsusAnimeMatrixController::Command(const unsigned char* data, size_t size, unsigned char reply)
++{
++    if(size < 2 || size > 65)
++    {
++        return false;
++    }
++    unsigned char packet[65] = {};
++    std::memcpy(packet, data, size);
++    int written = hid_write(hid, packet, sizeof(packet));
++    if(written != sizeof(packet))
++    {
++        LOG_WARNING("[ASUS AniMe Matrix] HID command %02X write: %d/65", data[1], written);
++        return false;
++    }
++    std::chrono::steady_clock::time_point deadline = std::chrono::steady_clock::now() + std::chrono::milliseconds(300);
++    while(std::chrono::steady_clock::now() < deadline)
++    {
++        int count = hid_read_timeout(hid, packet, sizeof(packet), 20);
++        if(count < 0)
++        {
++            break;
++        }
++        if(count >= 3 && packet[0] == 0xEC && packet[1] == reply)
++        {
++            if(reply == 0x41)
++            {
++                if(count <= 10 || packet[10] > 2)
++                {
++                    break;
++                }
++                hardware_mode = packet[10];
++                return true;
++            }
++            if(packet[2] == 0)
++            {
++                return true;
++            }
++            break;
++        }
++    }
++    LOG_WARNING("[ASUS AniMe Matrix] Missing/invalid reply for command %02X", data[1]);
++    return false;
++}
++
++bool AsusAnimeMatrixController::ReadMode()
++{
++    const unsigned char query[] = {0xEC, 0xC1};
++    return Command(query, sizeof(query), 0x41);
++}
++
++bool AsusAnimeMatrixController::SetModeLocked(unsigned char value)
++{
++    if(value > 2)
++    {
++        return false;
++    }
++    const unsigned char command[] = {0xEC, 0x42, value, 0, 0};
++    frame_valid = false;
++    if(!Command(command, sizeof(command), 0x42))
++    {
++        hardware_mode = -1;
++        return false;
++    }
++    hardware_mode = value;
++    if(value == 0 && (!ReadMode() || hardware_mode != 0))
++    {
++        LOG_WARNING("[ASUS AniMe Matrix] Off-mode readback failed");
++        hardware_mode = -1;
++        return false;
++    }
++    return true;
++}
++
++bool AsusAnimeMatrixController::SetMode(unsigned char value)
++{
++    std::lock_guard<std::mutex> guard(io_mutex);
++    bool applied = SetModeLocked(value);
++    if(value != 1)
++    {
++        CloseBulk();
++    }
++    return applied;
++}
++
++bool AsusAnimeMatrixController::OpenBulk()
++{
++    if(bulk)
++    {
++        return true;
++    }
++    if(!usb_context || serial.empty())
++    {
++        LOG_WARNING("[ASUS AniMe Matrix] Cannot open bulk interface without USB context and serial identity");
++        return false;
++    }
++    libusb_device** devices = nullptr;
++    ssize_t count = libusb_get_device_list(usb_context.get(), &devices);
++    if(count < 0)
++    {
++        LOG_WARNING("[ASUS AniMe Matrix] USB enumeration failed: %s", libusb_error_name((int)count));
++        return false;
++    }
++    for(ssize_t i = 0; i < count && !bulk; i++)
++    {
++        libusb_device_descriptor desc;
++        if(libusb_get_device_descriptor(devices[i], &desc) != 0 || desc.idVendor != 0x0B05 || desc.idProduct != 0x1A21)
++        {
++            continue;
++        }
++        libusb_device_handle* candidate = nullptr;
++        int result = libusb_open(devices[i], &candidate);
++        if(result != 0)
++        {
++            LOG_WARNING("[ASUS AniMe Matrix] USB open: %s", libusb_error_name(result));
++            continue;
++        }
++        unsigned char number[256] = {};
++        int length = libusb_get_string_descriptor_ascii(candidate, desc.iSerialNumber, number, sizeof(number) - 1);
++        if(length > 0 && serial == (const char*)number)
++        {
++            result = libusb_claim_interface(candidate, 0);
++            if(result == 0)
++            {
++                bulk = candidate;
++                break;
++            }
++            LOG_WARNING("[ASUS AniMe Matrix] USB interface claim: %s", libusb_error_name(result));
++        }
++        libusb_close(candidate);
++    }
++    libusb_free_device_list(devices, 1);
++    return bulk != nullptr;
++}
++
++void AsusAnimeMatrixController::CloseBulk()
++{
++    if(bulk)
++    {
++        libusb_release_interface(bulk, 0);
++        libusb_close(bulk);
++        bulk = nullptr;
++    }
++    frame_valid = false;
++}
++
++bool AsusAnimeMatrixController::SendFrame(const unsigned char* frame, size_t size)
++{
++    if(!frame || size != ASUS_MATRIX_FRAME_SIZE)
++    {
++        return false;
++    }
++    std::lock_guard<std::mutex> guard(io_mutex);
++    if(frame_valid && hardware_mode == 1 && std::memcmp(frame, last_frame, size) == 0)
++    {
++        return true;
++    }
++    if(!OpenBulk())
++    {
++        return false;
++    }
++    if(hardware_mode != 1 && !SetModeLocked(1))
++    {
++        CloseBulk();
++        return false;
++    }
++    const unsigned char prep[] = {0xEC, 0x7F, 4, 0, 3};
++    if(!Command(prep, sizeof(prep), 0x7F))
++    {
++        CloseBulk();
++        return false;
++    }
++    int written = 0;
++    int result = libusb_bulk_transfer(bulk, 0x01, (unsigned char*)frame, ASUS_MATRIX_FRAME_SIZE, &written, 500);
++    if(result != 0 || written != ASUS_MATRIX_FRAME_SIZE)
++    {
++        LOG_WARNING("[ASUS AniMe Matrix] Bulk frame failed: %s, %d/768 bytes", libusb_error_name(result), written);
++        hardware_mode = -1;
++        CloseBulk();
++        return false;
++    }
++    std::memcpy(last_frame, frame, size);
++    frame_valid = true;
++    return true;
++}
++
++int AsusAnimeMatrixController::GetMode()
++{
++    std::lock_guard<std::mutex> guard(io_mutex);
++    return hardware_mode;
++}
++
++std::string AsusAnimeMatrixController::GetLocation()
++{
++    return location;
++}
++
++std::string AsusAnimeMatrixController::GetSerial()
++{
++    return serial;
++}
++
++std::string AsusAnimeMatrixController::GetFirmware()
++{
++    return firmware;
++}
+diff --git a/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.h b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.h
+new file mode 100644
+index 0000000..407162e
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixController.h
+@@ -0,0 +1,51 @@
++/*---------------------------------------------------------*\
++| AsusAnimeMatrixController.h                              |
++|                                                         |
++|   USB transport for X670E Extreme AniMe Matrix           |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include <hidapi.h>
++#include <libusb.h>
++#include <memory>
++#include <mutex>
++#include <string>
++#include "AsusAnimeMatrixMap.h"
++
++class AsusAnimeMatrixController
++{
++public:
++    AsusAnimeMatrixController(hid_device* device, const char* path, const char* firmware);
++    ~AsusAnimeMatrixController();
++
++    bool                        SetMode(unsigned char value);
++    bool                        SendFrame(const unsigned char* frame, size_t size);
++    int                         GetMode();
++    std::string                 GetLocation();
++    std::string                 GetSerial();
++    std::string                 GetFirmware();
++
++private:
++    static std::shared_ptr<libusb_context> SharedUSBContext();
++    bool                        Command(const unsigned char* data, size_t size, unsigned char reply);
++    bool                        ReadMode();
++    bool                        SetModeLocked(unsigned char value);
++    bool                        OpenBulk();
++    void                        CloseBulk();
++
++    hid_device*                 hid;
++    std::shared_ptr<libusb_context> usb_context;
++    libusb_device_handle*       bulk;
++    std::mutex                  io_mutex;
++    std::string                 location;
++    std::string                 serial;
++    std::string                 firmware;
++    unsigned char               last_frame[ASUS_MATRIX_FRAME_SIZE];
++    bool                        frame_valid;
++    int                         hardware_mode;
++};
+diff --git a/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixControllerDetect.cpp b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixControllerDetect.cpp
+new file mode 100644
+index 0000000..4e458d7
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixControllerDetect.cpp
+@@ -0,0 +1,48 @@
++/*---------------------------------------------------------*\
++| AsusAnimeMatrixControllerDetect.cpp                      |
++|                                                         |
++|   Detect the X670E Extreme AniMe Matrix HID interface    |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include "DetectionManager.h"
++#include "LogManager.h"
++#include "RGBController_AsusAnimeMatrix.h"
++#include <cstring>
++
++DetectedControllers DetectAsusAnimeMatrix(hid_device_info* info, const std::string&)
++{
++    DetectedControllers result;
++    hid_device* device = hid_open_path(info->path);
++    if(!device)
++    {
++        return result;
++    }
++    unsigned char packet[65] = {0xEC, 0x82};
++    if(hid_write(device, packet, sizeof(packet)) == sizeof(packet))
++    {
++        for(int i = 0; i < 8; i++)
++        {
++            int count = hid_read_timeout(device, packet, sizeof(packet), 50);
++            if(count < 0)
++            {
++                break;
++            }
++            if(count >= 14 && packet[0] == 0xEC && packet[1] == 0x02 && std::memcmp(packet + 3, "ALDR2-S452-", 11) == 0)
++            {
++                packet[count < 65 ? count : 64] = 0;
++                AsusAnimeMatrixController* controller = new AsusAnimeMatrixController(device, info->path, (const char*)packet + 3);
++                result.push_back(new RGBController_AsusAnimeMatrix(controller));
++                LOG_INFO("[ASUS AniMe Matrix] Detected X670E Extreme, firmware %s", packet + 3);
++                return result;
++            }
++        }
++    }
++    hid_close(device);
++    return result;
++}
++
++REGISTER_HID_DETECTOR_I("ASUS ROG Crosshair X670E Extreme AniMe Matrix", DetectAsusAnimeMatrix, 0x0B05, 0x1A21, 1);
+diff --git a/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixMap.h b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixMap.h
+new file mode 100644
+index 0000000..e81a4d2
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/AsusAnimeMatrixMap.h
+@@ -0,0 +1,67 @@
++/*---------------------------------------------------------*\
++| AsusAnimeMatrixMap.h                                     |
++|                                                         |
++|   X670E Extreme portrait topology and wire frame offsets |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#define ASUS_MATRIX_WIDTH       7
++#define ASUS_MATRIX_HEIGHT      36
++#define ASUS_MATRIX_LED_COUNT   222
++#define ASUS_MATRIX_FRAME_SIZE  768
++
++/*---------------------------------------------------------*\
++| Wire IDs retain the locally inspected HAL ordering.      |
++| Portrait placement follows the owner's installed panel. |
++| Asymmetric physical landmarks await visual confirmation.|
++\*---------------------------------------------------------*/
++static const unsigned char ASUS_MATRIX_MAP[ASUS_MATRIX_WIDTH * ASUS_MATRIX_HEIGHT] = {
++    1, 2, 0, 0, 0, 0, 0,
++    3, 4, 5, 6, 0, 0, 0,
++    7, 8, 9, 10, 11, 12, 0,
++    13, 14, 15, 16, 17, 18, 19,
++    20, 21, 22, 23, 24, 25, 26,
++    27, 28, 29, 30, 31, 32, 33,
++    34, 35, 36, 37, 38, 39, 40,
++    41, 42, 43, 44, 45, 46, 47,
++    48, 49, 50, 51, 52, 53, 54,
++    55, 56, 57, 58, 59, 60, 61,
++    62, 63, 64, 65, 66, 67, 68,
++    69, 70, 71, 72, 73, 74, 75,
++    76, 77, 78, 79, 80, 81, 82,
++    83, 84, 85, 86, 87, 88, 89,
++    90, 91, 92, 93, 94, 95, 96,
++    97, 98, 99, 100, 101, 102, 103,
++    104, 105, 106, 107, 108, 109, 110,
++    111, 112, 113, 114, 115, 116, 117,
++    118, 119, 120, 121, 122, 123, 124,
++    125, 126, 127, 128, 129, 130, 131,
++    132, 133, 134, 135, 136, 137, 138,
++    139, 140, 141, 142, 143, 144, 145,
++    146, 147, 148, 149, 150, 151, 152,
++    153, 154, 155, 156, 157, 158, 159,
++    160, 161, 162, 163, 164, 165, 166,
++    167, 168, 169, 170, 171, 172, 173,
++    174, 175, 176, 177, 178, 179, 180,
++    181, 182, 183, 184, 185, 186, 187,
++    188, 189, 190, 191, 192, 193, 194,
++    195, 196, 197, 198, 199, 200, 201,
++    202, 203, 204, 205, 206, 207, 0,
++    208, 209, 210, 211, 212, 0, 0,
++    214, 215, 216, 217, 0, 0, 0,
++    218, 219, 220, 0, 0, 0, 0,
++    222, 223, 0, 0, 0, 0, 0,
++    224, 0, 0, 0, 0, 0, 0,
++};
++
++static inline unsigned int AsusMatrixRedOffset(unsigned int wire)
++{
++    unsigned int index = wire - 1;
++    unsigned int slot  = index < 15 ? index : 16 + (index - 15) / 14 * 16 + (index - 15) % 14;
++    return slot / 16 * 48 + slot % 16;
++}
+diff --git a/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.cpp b/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.cpp
+new file mode 100644
+index 0000000..8160249
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.cpp
+@@ -0,0 +1,143 @@
++/*---------------------------------------------------------*\
++| RGBController_AsusAnimeMatrix.cpp                        |
++|                                                         |
++|   OpenRGB adapter for X670E Extreme AniMe Matrix         |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#include "RGBController_AsusAnimeMatrix.h"
++#include <algorithm>
++
++/**------------------------------------------------------------------*\
++    @name ASUS ROG Crosshair X670E Extreme AniMe Matrix
++    @category LEDStrip
++    @type USB
++    @save :x:
++    @direct :white_check_mark:
++    @effects :white_check_mark:
++    @detectors DetectAsusAnimeMatrix
++    @comment Firmware ALDR2-S452 only. Separate from Aura and LiveDash OLED.
++\*-------------------------------------------------------------------*/
++
++RGBController_AsusAnimeMatrix::RGBController_AsusAnimeMatrix(AsusAnimeMatrixController* controller_ptr)
++{
++    controller  = controller_ptr;
++    name        = "ASUS ROG Crosshair X670E Extreme AniMe Matrix";
++    vendor      = "ASUS";
++    description = "222 individually addressable RGB pixels; separate from Aura and LiveDash OLED";
++    type        = DEVICE_TYPE_LEDSTRIP;
++    location    = controller->GetLocation();
++    serial      = controller->GetSerial();
++    version     = controller->GetFirmware();
++
++    mode off;
++    off.name        = "Off";
++    off.value       = 0;
++    off.flags       = 0;
++    off.color_mode  = MODE_COLORS_NONE;
++    modes.push_back(off);
++
++    mode direct;
++    direct.name             = "Direct";
++    direct.value            = 1;
++    direct.flags            = MODE_FLAG_HAS_PER_LED_COLOR | MODE_FLAG_HAS_BRIGHTNESS;
++    direct.color_mode       = MODE_COLORS_PER_LED;
++    direct.brightness_min   = 0;
++    direct.brightness_max   = 100;
++    direct.brightness       = 100;
++    modes.push_back(direct);
++
++    mode hardware;
++    hardware.name       = "Hardware Animation";
++    hardware.value      = 2;
++    hardware.flags      = 0;
++    hardware.color_mode = MODE_COLORS_NONE;
++    modes.push_back(hardware);
++
++    int current_mode = controller->GetMode();
++    active_mode = current_mode >= 0 && current_mode <= 2 ? current_mode : 0;
++    SetupZones();
++}
++
++RGBController_AsusAnimeMatrix::~RGBController_AsusAnimeMatrix()
++{
++    Shutdown();
++    delete controller;
++}
++
++void RGBController_AsusAnimeMatrix::SetupZones()
++{
++    zones.clear();
++    leds.clear();
++    colors.clear();
++    wire_indices.clear();
++
++    zone panel;
++    panel.name              = "AniMe Matrix";
++    panel.type              = ZONE_TYPE_MATRIX;
++    panel.leds_min          = ASUS_MATRIX_LED_COUNT;
++    panel.leds_max          = ASUS_MATRIX_LED_COUNT;
++    panel.leds_count        = ASUS_MATRIX_LED_COUNT;
++    panel.matrix_map.width  = ASUS_MATRIX_WIDTH;
++    panel.matrix_map.height = ASUS_MATRIX_HEIGHT;
++    panel.matrix_map.map.assign(ASUS_MATRIX_WIDTH * ASUS_MATRIX_HEIGHT, 0xFFFFFFFF);
++    for(unsigned int wire = 1; wire <= 225; wire++)
++    {
++        const unsigned char* pos = std::find(ASUS_MATRIX_MAP, ASUS_MATRIX_MAP + sizeof(ASUS_MATRIX_MAP), wire);
++        if(pos == ASUS_MATRIX_MAP + sizeof(ASUS_MATRIX_MAP))
++        {
++            continue;
++        }
++        panel.matrix_map.map[pos - ASUS_MATRIX_MAP] = (unsigned int)leds.size();
++        led pixel;
++        pixel.name = "Pixel " + std::to_string(leds.size() + 1);
++        leds.push_back(pixel);
++        wire_indices.push_back(wire);
++    }
++    zones.push_back(panel);
++    SetupColors();
++}
++
++void RGBController_AsusAnimeMatrix::DeviceConfigureZone(int /*zone_idx*/)
++{
++}
++
++void RGBController_AsusAnimeMatrix::DeviceUpdateLEDs()
++{
++    if(modes[active_mode].value != 1)
++    {
++        return;
++    }
++    unsigned char frame[ASUS_MATRIX_FRAME_SIZE] = {};
++    unsigned int brightness = modes[active_mode].brightness > 100 ? 100 : modes[active_mode].brightness;
++    for(size_t i = 0; i < wire_indices.size(); i++)
++    {
++        unsigned int offset = AsusMatrixRedOffset(wire_indices[i]);
++        frame[offset]       = (unsigned char)(RGBGetRValue(colors[i]) * brightness / 100);
++        frame[offset + 16]  = (unsigned char)(RGBGetGValue(colors[i]) * brightness / 100);
++        frame[offset + 32]  = (unsigned char)(RGBGetBValue(colors[i]) * brightness / 100);
++    }
++    controller->SendFrame(frame, sizeof(frame));
++}
++
++void RGBController_AsusAnimeMatrix::DeviceUpdateZoneLEDs(int /*zone_idx*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_AsusAnimeMatrix::DeviceUpdateSingleLED(int /*led_idx*/)
++{
++    DeviceUpdateLEDs();
++}
++
++void RGBController_AsusAnimeMatrix::DeviceUpdateMode()
++{
++    unsigned char value = (unsigned char)modes[active_mode].value;
++    if(controller->SetMode(value) && value == 1)
++    {
++        DeviceUpdateLEDs();
++    }
++}
+diff --git a/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.h b/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.h
+new file mode 100644
+index 0000000..079c4b3
+--- /dev/null
++++ b/Controllers/AsusAnimeMatrixController/RGBController_AsusAnimeMatrix.h
+@@ -0,0 +1,32 @@
++/*---------------------------------------------------------*\
++| RGBController_AsusAnimeMatrix.h                          |
++|                                                         |
++|   OpenRGB adapter for X670E Extreme AniMe Matrix         |
++|                                                         |
++|   Robolightning                             18 Nov 2026 |
++|                                                         |
++|   SPDX-License-Identifier: GPL-2.0-or-later               |
++\*---------------------------------------------------------*/
++
++#pragma once
++
++#include "AsusAnimeMatrixController.h"
++#include "RGBController.h"
++
++class RGBController_AsusAnimeMatrix : public RGBController
++{
++public:
++    RGBController_AsusAnimeMatrix(AsusAnimeMatrixController* controller_ptr);
++    ~RGBController_AsusAnimeMatrix();
++
++    void SetupZones();
++    void DeviceConfigureZone(int zone_idx) override;
++    void DeviceUpdateLEDs() override;
++    void DeviceUpdateZoneLEDs(int zone_idx) override;
++    void DeviceUpdateSingleLED(int led_idx) override;
++    void DeviceUpdateMode() override;
++
++private:
++    AsusAnimeMatrixController* controller;
++    std::vector<unsigned int> wire_indices;
++};
+diff --git a/Documentation/ASUSAnimeMatrix.md b/Documentation/ASUSAnimeMatrix.md
+new file mode 100644
+index 0000000..8b7b444
+--- /dev/null
++++ b/Documentation/ASUSAnimeMatrix.md
+@@ -0,0 +1,64 @@
++# ASUS Crosshair X670E Extreme AniMe Matrix
++
++USB `0B05:1A21`, firmware family `ALDR2-S452-*`. Detection probes HID interface 1
++and rejects other firmware families sharing the controller PID. The separate
++Aura controller and LiveDash OLED are outside this driver's scope.
++
++## Exposed features
++
++* Off: `EC 42 00 00 00`, verified with `EC C1` status on the same HID handle.
++* Direct: 222 independently addressable RGB LEDs, software brightness 0..100.
++* Hardware Animation: resume the default device player; no slot/preset/upload UI.
++* One non-resizable matrix zone, portrait 7 columns × 36 rows with stepped edges.
++* Unchanged frames are suppressed. No polling timer, playback service or Qt
++  dependency is introduced by the controller.
++
++The row lengths are `2,4,6`, 26 full rows of 7, then `7,6,5,4,3,2,1`.
++Physical portrait placement is inferred from the owner's photograph and matching
++222-pixel topology. Exact asymmetric physical landmarks await owner confirmation.
++Wire identity and USB slot packing were retained from the locally inspected HAL
++table; the original oblique HAL image-space raster is not used as a physical map.
++
++## Protocol and ownership
++
++HID reports are 65 bytes. Firmware: `EC 82` -> `EC 02 00 <ASCII>`.
++Status: `EC C1` -> `EC 41`, byte 10 is player mode. Mode selection:
++`EC 42 mode 00 00` -> `EC 42 00` (0 off, 1 software, 2 hardware).
++Software frames: `EC 7F 04 00 03` -> `EC 7F 00`, then 768 bytes on bulk OUT `01`,
++interface 0. Mode 2 is not an off/S5 setting on the tested firmware.
++
++The frame has 16 blocks of 48 bytes (16 R, 16 G, 16 B). First block represents
++15 wire positions, subsequent blocks 14. Active wire IDs are 1..225 excluding
++213, 221, 225. `AsusMatrixRedOffset` maps one-based wire IDs to the R offset;
++G/B follow at +16/+32. All padding bytes remain zero.
++
++A private libusb context is initialized during early HID discovery, before
++legacy generic detectors can globally enable UsbDk on Windows. Shared ownership
++retains it across rescans and through device destruction. The bulk interface is
++opened lazily and its serial is matched before claim. No unrelated same-PID
++interface is claimed, no kernel driver is detached, and no firmware state is
++saved. HID preparation and bulk upload share a transaction mutex. Matching acks,
++lengths and bounded timeouts are checked. Off/readback uses the owned HID handle;
++do not open a competing diagnostic reader while this controller is active.
++
++## Validation and limitations
++
++The original full OpenRGB integration was confirmed by the owner for Off, uniform
++red and Direct. The isolated refactored transport was exercised on the Windows
++device: changed frame upload, repeated-frame suppression, Off/readback; no warnings.
++The proposed source files compile with MSVC and GCC/Linux against upstream
++headers. Simulated transport checks on both platforms cover serial-before-claim,
++duplicate frames, short bulk transfer recovery and invalid Off/readback/write.
++These are not claims of a full fresh OpenRGB build or physical Linux validation.
++
++Untested: first hotplug, S5/reboot persistence, exact asymmetric portrait landmarks,
++other firmware/model families, every preset/slot and persistent animation uploads.
++Image/GIF/APNG rendering belongs to an external companion/effects engine and is
++not included in this core driver change.
++
++Protocol references: [Polylux](https://github.com/vladulus/polylux), local HAL wire
++table inspection, and owner hardware observations. No vendor binary, disassembly,
++artwork, proprietary animation or third-party executable is included.
++
++AI assistance was used in this implementation. Manual human vetting under the
++upstream contribution policy remains outstanding; these checks do not replace it.
