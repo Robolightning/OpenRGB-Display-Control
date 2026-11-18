@@ -7,6 +7,10 @@ on 2026-11-18. It is independent of the earlier Commander Core fix.
 The handoff includes a core-only patch, protocol/device issue draft, MR draft,
 and native transport tests. It does not include the Python player or custom GUI.
 
+Submitted for transparent discussion as **[Draft MR !3864](https://gitlab.com/CalcProgrammer1/OpenRGB/-/merge_requests/3864)**.
+The driver is not accepted upstream. Its description discloses AI assistance and
+outstanding human review, physical mapping, reboot/hotplug and Linux hardware checks.
+
 To inspect/apply in a separate clean OpenRGB checkout:
 
 ```
@@ -18,9 +22,10 @@ Use the project's normal qmake build instructions. Controller sources/headers
 are found recursively by OpenRGB.pro. Device metadata is included for generated
 udev/support tooling. No build-system platform exception is introduced.
 
-**Submission is not authorized by technical preparation alone.** OpenRGB's
+OpenRGB's
 [CONTRIBUTING.md](https://gitlab.com/CalcProgrammer1/OpenRGB/-/blob/master/CONTRIBUTING.md)
 generally disallows AI-generated submissions and expects a human to understand
 and manually vet submitted code. This implementation used AI assistance. No
-independent human review is claimed, and no MR has been submitted by this task.
-The intended author must resolve that policy and validation requirement honestly.
+independent human review or policy compliance is claimed by the Draft MR.
+The intended author must resolve that policy and validation requirement honestly
+before requesting merge.

@@ -50,6 +50,7 @@ The default Matrix backend is **OpenRGB SDK** at `127.0.0.1:6742`. OpenRGB must
 contain the separately prepared native Matrix driver. The driver is not yet
 accepted upstream; see [the upstream handoff](upstream/README.md).
 The SDK device must expose the matching portrait map and 222 LEDs.
+The core driver is proposed in [Draft MR !3864](https://gitlab.com/CalcProgrammer1/OpenRGB/-/merge_requests/3864).
 
 SDK errors fail explicitly. They never silently fall back to direct USB.
 
