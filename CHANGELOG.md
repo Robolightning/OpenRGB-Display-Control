@@ -1,6 +1,6 @@
 # Changelog
 
-## 0.1.0a1 — unpublished
+## 0.1.0a1 — 2026-11-18 — experimental pre-release
 
 * Extract the companion into an installable standalone package and optional Qt GUI.
 * Keep native Matrix support in a separate, core-only OpenRGB patch.

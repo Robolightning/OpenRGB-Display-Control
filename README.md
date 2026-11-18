@@ -1,5 +1,9 @@
 # OpenRGB Display Control
 
+[![checks](https://github.com/Robolightning/OpenRGB-Display-Control/actions/workflows/checks.yml/badge.svg)](https://github.com/Robolightning/OpenRGB-Display-Control/actions/workflows/checks.yml)
+
+Experimental releases: [GitHub Releases](https://github.com/Robolightning/OpenRGB-Display-Control/releases).
+
 **Experimental, hardware-specific alpha.** A standalone Python/Qt companion for
 ASUS ROG Crosshair X670E Extreme AniMe Matrix and Corsair H170i ELITE LCD.
 This is an independent project, not an official OpenRGB component or plugin.
@@ -117,7 +121,8 @@ python -m build
 
 Tests use simulated transports and do not write to physical devices. CI covers
 Windows/Linux and Python 3.11/3.14, including an offscreen GUI when installed.
-The CI workflow is prepared locally; its remote runs are not claimed as passed.
+Current remote results are available in [GitHub Actions](https://github.com/Robolightning/OpenRGB-Display-Control/actions).
+The validation record distinguishes local checks from hosted CI and hardware observations.
 
 Read the [architecture](docs/ARCHITECTURE.md), [protocol notes](docs/PROTOCOL.md),
 [audit](docs/AUDIT.md), [release handoff](docs/RELEASE.md), and

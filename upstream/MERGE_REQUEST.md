@@ -1,5 +1,10 @@
 # Draft: Initial commit for ASUS ROG Crosshair X670E Extreme AniMe Matrix
 
+**Draft disclosure:** AI tools assisted this implementation and audit. Independent
+human vetting has not been completed. OpenRGB's contribution policy generally
+disallows AI-generated submissions; this draft does not claim compliance or
+readiness for merge and may be closed under that policy.
+
 The separate motherboard Matrix controller is currently missing native support.
 This adds firmware-gated detection of `0B05:1A21` / `ALDR2-S452-*`, Off, per-pixel
 Direct with brightness, a 222-LED stepped portrait matrix map, and the default

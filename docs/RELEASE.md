@@ -1,8 +1,8 @@
-# Publication handoff
+# Release process
 
-The repository is prepared locally. No remote repository, package upload or MR
-submission is performed by this preparation. Suggested public name:
-**OpenRGB-Display-Control**. Suggested first tag: **v0.1.0a1** (experimental).
+Public repository: [OpenRGB-Display-Control](https://github.com/Robolightning/OpenRGB-Display-Control).
+The initial version is **v0.1.0a1**, published as an experimental pre-release.
+GitHub release artifacts are separate from PyPI; no PyPI publication is implied.
 
 Before a public tag, review the audit/provenance and exact hardware scope. Keep
 the inferred physical map and untested reboot/hotplug/Linux limitations visible.
@@ -28,7 +28,6 @@ For the native Matrix driver, use the separate branch/patch described in
 Draft while manual human vetting and physical validation remain outstanding.
 Do not bundle Commander Core or the Python player into that MR.
 
-The provided patch author identity follows the local Git configuration. The
-patch includes normal Git author metadata; review that public identity before
-posting it. Repository code/docs do not contain private device serials or user
-filesystem paths.
+The driver patch includes normal Git author metadata. Repository code/docs do
+not contain private device serials or user filesystem paths. See GitHub Actions
+for hosted checks; historical local validation is recorded separately.

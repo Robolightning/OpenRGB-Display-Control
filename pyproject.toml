@@ -23,6 +23,11 @@ gui = ["PySide6-Essentials>=6.8,<7"]
 usb = ["pyusb>=1.3,<2", "libusb>=1.0.27,<2; sys_platform == 'win32'"]
 dev = ["pytest>=8,<10", "ruff>=0.14,<1", "build"]
 
+[project.urls]
+Repository = "https://github.com/Robolightning/OpenRGB-Display-Control"
+Issues = "https://github.com/Robolightning/OpenRGB-Display-Control/issues"
+Releases = "https://github.com/Robolightning/OpenRGB-Display-Control/releases"
+
 [project.scripts]
 openrgb-display-control = "openrgb_display_control.cli:main"
 
